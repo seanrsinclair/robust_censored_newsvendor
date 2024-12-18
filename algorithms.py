@@ -106,10 +106,104 @@ def joint_order_saa(order_level_one, order_level_two, censored_demands_one, cens
                 if p_1 + remaining_mean >= actual_rho: # TODO: Running into setting where this case is never visited
                     # print(f'Output solution: {q}')
                     return float(q)
-            # print(f'For some reason not finding a q value which satisfies?')
+
         else: # we still have not seen \rho mass, so let us just output lambda
             # print(f'Did not find sufficient mass, output: {order_level_one}')
             return float(order_level_one)
+
+def robust_plus_saa(order_level_one, order_level_two, censored_demands_one, censored_demands_two, b, h, qbar, Gminus, delta=0.3):
+    '''
+    Implements our algorithm
+
+    Note: Added some "sandwhiching" to ensure the confidence interval estimates for Gminus are in [0,1]
+    '''
+
+
+    lam = order_level_one
+    rho = b / (b+h)
+
+    N = len(censored_demands_one)
+
+
+    Gminushat_two = np.mean(censored_demands_two < order_level_two)
+    Gminushat_one = np.mean(censored_demands_one < lam)
+
+
+    conf = np.sqrt(np.log(4 / delta) / (2*N))
+
+    # one is for large selling season
+    # two is for small selling season
+
+    # both are bigger than rho + conf
+    if Gminushat_two >= np.minimum(1, rho+conf) and Gminushat_one >= np.minimum(1, rho+conf):
+        combined_data = np.concatenate((censored_demands_one, censored_demands_two))
+        return np.quantile(combined_data, rho)
+
+    # only the small one (somehow) is bigger than rho + conf
+    elif Gminushat_two >= np.minimum(1, rho+conf) and Gminushat_one < np.minimum(1, rho+conf):
+        return np.quantile(censored_demands_two, rho)
+
+    # the small one is smaller than rho + conf, we run the old version of the algorithm
+    else: # Old Version of Algorithm
+        Gminushat = Gminushat_one
+
+        # Tests out three different confidence intervals to determine if one is tighter than the other
+        conf_one = np.sqrt(np.log(2 / delta) / (2*N))
+        conf_two = np.sqrt(1 / (4*N * delta))
+        conf_three = np.sqrt((4*Gminus*(1 - Gminus) *np.log(2 / delta))/N) + (4*max(Gminus, 1 - Gminus)*np.log(2 / delta))/(3*N)
+
+        if DEBUG:
+            print(f'Bernstein: {conf_three}, Chernoff: {conf_two}, Hoeffding: {conf_one}')
+            if conf_three <= min(conf_one, conf_two):
+                print(f'Bernstein Smallest')
+            elif conf_two <= min(conf_one, conf_three):
+                print(f'Chernoff Smallest!')
+            else:
+                print(f'Hoeffding Smallest!')
+
+        conf_radius = min(conf_one, conf_two, conf_three) # taking minimum of Hoeffding, Bernstein, and Chernoff
+
+        if DEBUG: print(f'Gminushat: {Gminushat}, and confidence radius: {conf_radius}')
+        if Gminushat >= np.minimum(1,rho + conf_radius): # Strictly identifiable regime
+            if DEBUG: print(f'Outputting SAA Solution')
+            return np.quantile(censored_demands_one, rho)
+        elif Gminushat < np.maximum(0, rho - conf_radius): # Striclty unidentifiable regime
+            if DEBUG: print(f'Outputting QCrit')
+            return helper.get_q_crit(Gminushat, lam, b, h, qbar)
+        else: # Knife-edge, outputting lambda
+            if DEBUG: print(f'Outputting lam')
+            return lam
+
+
+def robust_bonus_saa(order_level_one, order_level_two, censored_demands_one, censored_demands_two, b, h, qbar, Gminus, delta=0.3):
+    '''
+    Implements our algorithm
+
+    Note: Added some "sandwhiching" to ensure the confidence interval estimates for Gminus are in [0,1]
+    '''
+    lam = order_level_one
+
+    rho = b / (b+h)
+
+    N = len(censored_demands_one)
+
+    conf = np.sqrt(np.log(2 / delta) / (2*N))
+
+    combined_data = np.append(censored_demands_one, censored_demands_two)
+
+    p2 = np.mean(combined_data < order_level_two)
+
+    p1_bonus = np.mean((order_level_two <= censored_demands_one) & (censored_demands_one < lam))
+
+    if p2 + p1_bonus >= np.minimum(1, rho+conf):
+        return np.quantile(combined_data, rho)
+
+    elif p2 + p1_bonus < np.maximum(0, rho - conf):
+        return helper.get_q_crit(p2 + p1_bonus, lam, b, h, qbar)
+
+    else:
+        return lam
+
 
 def robust_saa(order_level_one, order_level_two, censored_demands_one, censored_demands_two, b, h, qbar, Gminus, delta=0.3):
     '''
@@ -150,7 +244,7 @@ def robust_saa(order_level_one, order_level_two, censored_demands_one, censored_
     else: # Knife-edge, outputting lambda
         if DEBUG: print(f'Outputting lam')
         return lam
-    
+
 
 
 '''

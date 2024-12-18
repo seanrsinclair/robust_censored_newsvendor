@@ -17,6 +17,7 @@ num_iters = 100 # number of iterations for each simulation pair of (algo, N, dis
 N_list = [500]
 
 b_list = [3, 9, 49]
+# b_list = [3]
 
 rho_list = [b / (b+h) for b in b_list]
 
@@ -49,6 +50,8 @@ for category in grouped_df['Category'].unique(): # Loops over each category
         ('ignorant_saa', algorithms.ignorant_saa),
         ('subsample_saa', algorithms.subsample_saa),
         ('robust', lambda lam, order_level_two, censored_one, censored_two, b, h: algorithms.robust_saa(lam, order_level_two, censored_one, censored_two, b, h, qbar, np.mean(gminus_calc_list < lam), delta=0.05)),
+        ('robust_plus', lambda lam, order_level_two, censored_one, censored_two, b, h: algorithms.robust_plus_saa(lam, order_level_two, censored_one, censored_two, b, h, qbar, np.mean(gminus_calc_list < lam), delta=0.05)),
+        ('robust_bonus', lambda lam, order_level_two, censored_one, censored_two, b, h: algorithms.robust_bonus_saa(lam, order_level_two, censored_one, censored_two, b, h, qbar, np.mean(gminus_calc_list < lam), delta=0.05)),
         ('km', algorithms.km_estimate),
         ('joint_order_saa', algorithms.joint_order_saa)
     ]

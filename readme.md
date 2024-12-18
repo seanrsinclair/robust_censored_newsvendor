@@ -20,3 +20,4 @@ In this repository we include all of the code used for generating the figures an
 - `synthetic_var_tables.py` creates the pivot tables comparing the algorithms on relative regret under different $\sigma^2$ values with Normally distributed demand
 - `synthetic_lam_tables.py` creates the pivot tables comparing the algorithms on relative regret under the different $\lambda$ values of the synthetic demand data
 - `synthetic_plots.py` creates the line plots comparing the algorithms on true minmax regret versus the number of datapoints $N$
+- `real_q_2_tables.py` creates the pivot tables comparing RCN+ on relative regret under different historical ordering quantities
