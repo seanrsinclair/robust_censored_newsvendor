@@ -1,133 +1,116 @@
 import numpy as np
-import seaborn as sns
 import matplotlib.pyplot as plt
-import algorithms
-import helper
+import seaborn as sns
 import matplotlib
-from helper import get_robust_cost
+import random
+import math
 import pandas as pd
-#Back-end to use depends on the system
+
+import helper
+
+
 from matplotlib.backends.backend_pgf import FigureCanvasPgf
 matplotlib.backend_bases.register_backend('pdf', FigureCanvasPgf)
 
 '''
 
-Creates two figures comparing q^\Delta and \Delta versus the observable boundary \lambda
+Creates two figures comparing q^\Delta and \Delta versus the observable boundary \lambda comparing well-separated to not well-separated distributions
 
 '''
 
 
 
 # Set up the plot style
-sns.set_style("white")
+sns.set_style("whitegrid")
 sns.set_palette("husl")
 plt.style.use('PaperDoubleFig.mplstyle.txt')
 
 
-# Gets the data to evaluate the expectations
-eval_data = np.random.exponential(scale=80, size=int(1e7))
+b = 0.9
+h = 0.1
 
-# List of rho values to check when h = 1
-rho_list = [0.1, 0.3, 0.5, 0.7, 0.9]
-b_list = [(-1) * rho / (rho - 1) for rho in rho_list]
-print(b_list)
-h = 1
-# rho_list = [b / (b+h) for b in b_list]
-qbar = 200
+rho = b / (b+h)
 
-# NOTE: Uncomment the following in order to get the data that is used to feed into the plotting code
-
-# lam_list = np.linspace(0, qbar, 300)
-# data = []
-
-# for lam in lam_list:
-#     for b in b_list:
-#         rho = b / (b+h)
-#         qcrit = helper.get_optimal_robust(b, h, lam, qbar, eval_data)
-#         cost = helper.get_robust_cost(qcrit, b, h, lam, qbar, eval_data)
-
-#         data.append({'b': h, 'h': h, 'rho': rho, 'lam': lam, 'qrisk': qcrit, 'cost': cost})
+qbar = 1
 
 
-# df = pd.DataFrame(data)
-# print(df.head(5))
 
-# df.to_csv(f'./data/delta_qcrit.csv', index=False)
+lambdas = [0.1,0.3,0.5,0.7,0.9]
+lambdas = [round(e,2) for e in lambdas]
 
-# Loops through the b values and gets the cusps, being \qopt
-rho_cusp_list = []
-for b in b_list:
-    rho = b / (b+h)
-    cusp = helper.get_optimal_quantile(b, h, eval_data)
-    rho_cusp_list.append(cusp)
-print(rho_cusp_list)
-
-# Loops through the b values to get the qcrit values:
-# q_crit_cusp_list = []
-# for b in b_list:
-#     rho = b / (b+h)
-#     qcrit = helper.get_q_crit( , lam, )
-
-# FIGURE ONE: q^\Delta
+gammas = np.arange(0.01,1.01,0.01)
 
 
-# Generate tick labels in the desired format
-tick_labels = [rf'$q^\star_{{{2*i+1}}}$' for i in range(len(rho_cusp_list))]
+gminus_calc_list = np.random.uniform(0, 1, int(1e6))
+
+# --- Create DataFrame for plotting ---
+records = []
+for lam in lambdas:
+    Gminus = np.mean(gminus_calc_list < lam)
+
+    for gam in gammas:
+
+        Mtilde = min(qbar, lam + ((rho - Gminus) / gam), 1 / gam)
+
+        q_val = helper.get_optimal_robust(b, h, lam, qbar, gminus_calc_list)
+
+        # check here that q_val = rho up to 2 digits
+        if not np.isclose(q_val, rho, atol=1e-2):
+            print(f"[WARN] q_val ≈ {q_val:.3f} but expected ≈ rho={rho:.3f} (λ={lam})")
+
+        delta_val = helper.get_robust_cost(q_val, b, h, lam, qbar, gminus_calc_list)
+
+        delta_theory = (1 - rho) * (rho - lam) * (b + h)
+        if not np.isclose(delta_val, delta_theory, atol=1e-2):
+            print(f"[WARN] Δ mismatch: computed {delta_val:.3f}, expected {delta_theory:.3f} (λ={lam})")
+        # check here that delta_val = (1-rho) * (rho-lam) ? 
+
+        qws_val = helper.get_well_separated_optimal_robust(b, h, lam, qbar, gam, gminus_calc_list)
+        
+        # check here that qws = lam + ((1-lam)-np.sqrt((1-lam)**2 +(rho-lam-gam*(Mtilde-lam))**2-(rho-lam)**2))/gam
+        qws_theory = lam + ((1 - lam) - np.sqrt((1 - lam)**2 + (rho - lam - gam*(Mtilde - lam))**2 - (rho - lam)**2)) / gam
+        if not np.isclose(qws_val, qws_theory, atol=1e-2):
+            print(f"[WARN] q_ws mismatch: computed {qws_val:.3f}, expected {qws_theory:.3f} (λ={lam}, γ={gam:.2f})")
+
+        deltaws_val = helper.get_well_separated_robust_cost(qws_val, b, h, lam, qbar, gam, gminus_calc_list)
+
+        # deltaws_theory = (1-rho) * (qws_val-lam)
+        deltaws_theory = (b+h) * (1 - rho) * (qws_theory - lam)
+        if not np.isclose(deltaws_val, deltaws_theory, atol=1e-2):
+            print(f"[WARN] Δ_ws mismatch: computed {deltaws_val:.3f}, expected {deltaws_theory:.3f} (λ={lam}, γ={gam:.2f})")
+
+        records.append({
+            'lambda': lam,
+            'gamma': gam,
+            'q': q_val,
+            'q_ws': qws_val,
+            'delta': delta_val,
+            'delta_ws': deltaws_val
+        })
+
+plot_df = pd.DataFrame(records)
+
+print(plot_df.head(5))
 
 
-df = pd.read_csv(f'./data/delta_qcrit.csv')
 
-# Create the seaborn line plot with x-axis 'q', y-axis 'cost', and color-coded by 'rho'
+# --- First plot: Δ−Δ_ws ---
 plt.figure(figsize=(10, 6))
-sns.lineplot(data=df, x='lam', y='qrisk', hue='rho')
+palette = sns.color_palette('husl', n_colors=len(lambdas))
+sns.lineplot(data=plot_df, x='gamma', y=plot_df['delta'] - plot_df['delta_ws'], hue='lambda', palette=palette)
+plt.xlabel(r'$\gamma$')
+plt.ylabel(r'$\Delta-\Delta^{\mathsf{ws}}$')
+plt.legend(loc='upper left', title=r'$\lambda$')
+plt.tight_layout()
+plt.savefig('./figures/ws_delta_diff.pdf', bbox_inches='tight')
+plt.close()
 
-# Customize the plot
-plt.xlabel(r'$\lambda$')
-plt.ylabel(r'$q^{\Delta}$')
-
-# Add thin, dotted vertical lines at each rho_cusp_list value
-for cusp in rho_cusp_list:
-    plt.axvline(x=cusp, color='gray', linestyle='--', linewidth=0.5)
-    plt.axhline(y=cusp, color='gray', linestyle='--', linewidth=0.5)
-
-
-# Set x-ticks at specified positions
-plt.xticks(ticks=rho_cusp_list, labels=tick_labels)
-plt.yticks(ticks=rho_cusp_list, labels=tick_labels)  # Keep y-ticks removed as requested
-
-
-
-
-# Update legend title to display as LaTeX notation for rho
-# Remove the legend
-plt.legend([], [], frameon=False)
-
-# saves the figure
-plt.savefig(f'./figures/qrisk.pdf', bbox_inches = 'tight')
-
-# FIGURE TWO: \Delta
-
-
-# Create the seaborn line plot with x-axis 'q', y-axis 'cost', and color-coded by 'rho'
+# --- Second plot: q^Δ−q^{Δ_ws} ---
 plt.figure(figsize=(10, 6))
-sns.lineplot(data=df, x='lam', y='cost', hue='rho')
-
-# Set x-ticks at specified positions
-plt.xticks(ticks=rho_cusp_list, labels=tick_labels)
-plt.yticks([])  # Keep y-ticks removed as requested
-
-# Add a horizontal line at y = 0
-plt.axhline(y=0, color='black', linestyle='--', linewidth=1)
-
-
-# Add thin, dotted vertical lines at each rho_cusp_list value
-for cusp in rho_cusp_list:
-    plt.axvline(x=cusp, color='gray', linestyle='--', linewidth=0.5)
-
-
-# Customize the plot
-plt.xlabel(r'$\lambda$')
-plt.ylabel('$\Delta$')
-plt.legend(title=r'$\rho$')
-
-plt.savefig(f'./figures/delta.pdf', bbox_inches = 'tight')
+palette = sns.color_palette('husl', n_colors=len(lambdas))
+sns.lineplot(data=plot_df, x='gamma', y=plot_df['q'] - plot_df['q_ws'], hue='lambda', legend=False, palette=palette)
+plt.xlabel(r'$\gamma$')
+plt.ylabel(r'$q^{\Delta}-q^{\Delta^{\mathsf{ws}}}$')
+plt.tight_layout()
+plt.savefig('./figures/ws_q_delta_diff.pdf', bbox_inches='tight')
+plt.close()

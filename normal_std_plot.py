@@ -1,5 +1,3 @@
-# prompt: sample 10000 random variables from D = max(0,X) where X = Normal(80, sigma^2). Do this for \sigma^2 \in \{20,25,30,35,40\}, then plot the empirical CDFs for each of these 400 sampled distributions. Use the husl seaborn color palette. Place a dashed line at D = 118.46 and call it lambda
-
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
@@ -10,8 +8,14 @@ from matplotlib.backends.backend_pgf import FigureCanvasPgf
 matplotlib.backend_bases.register_backend('pdf', FigureCanvasPgf)
 
 
+"""
+
+Creates figure comparing the CDFs of the Gaussian distributions used in the evaluation
+
+"""
+
 sns.set_style("white")
-sns.set_palette("husl")
+sns.set_palette("viridis")  # Use the viridis palette
 plt.style.use('PaperDoubleFig.mplstyle.txt')
 
 # Set the sigmas
@@ -21,7 +25,7 @@ sigmas = [20, 25, 30, 35, 40]
 plt.figure(figsize=(12, 6))
 
 # Use husl color palette
-colors = sns.color_palette("husl", len(sigmas))
+colors = sns.color_palette("viridis", len(sigmas))[::-1]
 
 # Iterate over sigmas
 for i, sigma in enumerate(sigmas):

@@ -7,6 +7,40 @@ import seaborn as sns
 from scipy.stats import linregress
 from helper import sample_dist
 
+"""
+synthetic_var_tables.py
+
+Purpose
+-------
+Generate LaTeX tables summarizing performance of algorithms on the synthetic
+(non–well-separated) VAR-style experiments for a single distribution
+(currently: distribution_name = 'normal').
+
+The script:
+1) Loads simulation results from ./data/{distribution_name}.csv
+2) Filters to the largest sample size N in the CSV
+3) Augments the dataset with two Monte Carlo “oracle” benchmarks:
+      - 'delta'   : robust min-max cost (minmax_cost)
+      - 'optimal' : true (oracle) newsvendor cost (true_cost)
+4) For each algorithm (excluding baselines), computes two table metrics:
+      - table_additive : additive gap vs the appropriate benchmark
+      - table_relative : percent gap vs the appropriate benchmark
+   The benchmark is chosen based on an identifiability heuristic using delta:
+      - if delta_value > 0.05  => treated as UNidentifiable (identifiable = 0)
+          compare minmax_cost to delta (robust benchmark)
+      - else                   => treated as identifiable (identifiable = 1)
+          compare true_cost to optimal (oracle benchmark)
+5) Pivots the table into a LaTeX-ready format with columns indexed by:
+      (lam, identifiable, param, metric)
+   and rows indexed by algorithm (mapped to LaTeX macros).
+
+Key outputs
+-----------
+- Printed LaTeX pivot table to stdout.
+"""
+
+
+
 h = 1
 distribution_name = 'normal'
 
@@ -49,20 +83,16 @@ for lam in lam_list:
 df = pd.read_csv(file_loc)
 df = df[df['N'] == df['N'].max()] # filtering to the most amount of data
 df = pd.concat([df, pd.DataFrame(delta)], ignore_index=True) # including the risk values
+
 df = df[df['lam'].isin(lam_list)] # filtering to the desired lambda value
+# df = df[df['lam'] == lam_list[2]]
+
 
 df = df[df['b'] == 9] # filtering to b = 9
 
 # Separate 'delta' data for easier reference
 delta_df = df[df['algorithm'] == 'delta']
 optimal_df = df[df['algorithm'] == 'optimal']
-
-# averaged_df = df.groupby([ 'lam', 'param', 'metric', 'algorithm'])['value'].mean().reset_index()
-
-# print(averaged_df.to_latex(index=True,
-#             float_format="{:.2f}".format,
-# ))
-
 
 # Compute the 'relative' metric and add rows
 relative_rows = []
@@ -77,26 +107,36 @@ for (algorithm, lam, param), group in df.groupby(['algorithm', 'lam', 'param']):
         optimal_value = optimal_df.loc[(optimal_df['lam'] == lam) & (optimal_df['param'] == param) & (optimal_df['metric'] == 'true_cost'), 'value']
         optimal_value = optimal_value.values[0]
 
-        print(f'Delta value: {delta_value}')
+        # print(f'Delta value: {delta_value}')
 
         if delta_value > 0.05: # problem is identifiable, add tolerance due to choice of lambda
             identifiable = 0
-            print(f"Minmax cost for algo: {group.loc[group['metric'] == 'minmax_cost', 'value'].mean()}")
+            additive_value = group.loc[group['metric'] == 'minmax_cost', 'value'].mean() - delta_value
             relative_value = 100*((group.loc[group['metric'] == 'minmax_cost', 'value'].mean() - delta_value) / delta_value)
-        else:
+        else: # problem is identifiable
             identifiable = 1
-            print(f'Optimal value: {optimal_value}')
-            print(f"Cost for algo: {group.loc[group['metric'] == 'true_cost', 'value'].mean()}")
+            additive_value = group.loc[group['metric'] == 'true_cost', 'value'].mean() - optimal_value
             relative_value = 100*((group.loc[group['metric'] == 'true_cost', 'value'].mean() - optimal_value) / optimal_value)
 
         relative_rows.append({
             'algorithm': algorithm,
             'lam': lam,
             'param': param,
-            'metric': 'relative',
+            'metric': 'table_relative',
             'value': relative_value,
             'identifiable': identifiable
         })
+
+
+        relative_rows.append({
+            'algorithm': algorithm,
+            'lam': lam,
+            'param': param,
+            'metric': 'table_additive',
+            'value': additive_value,
+            'identifiable': identifiable
+        })
+
 df_test = pd.DataFrame(relative_rows)
 
 # Append the new rows to the original dataframe
@@ -121,21 +161,22 @@ df_extended['algorithm'] = df_extended['algorithm'].replace(mapping)
 filtered_df = df_extended[
     (df_extended['algorithm'] != 'delta') &
     (df_extended['algorithm'] != 'optimal') &
-    (df_extended['metric'] == 'relative')
+    (df_extended['metric'].isin(['table_additive', 'table_relative']))
 ]
 
 
 pivot_table = filtered_df.pivot_table(
     index='algorithm', 
-    columns=['lam', 'identifiable', 'param'], 
+    columns=['lam', 'identifiable', 'param', 'metric'], 
     values='value', 
     aggfunc='mean'
 )
 
 # Sort the columns with 'identifiable' decreasing and 'lam' increasing
-pivot_table = pivot_table.sort_index(axis=1, level=['lam', 'identifiable', 'param'], ascending=[True, False, True])
+pivot_table = pivot_table.sort_index(axis=1, level=['lam', 'identifiable', 'param', 'metric'], ascending=[True, False, True, True])
 
 
 print(pivot_table.to_latex(index=True,
-            float_format="{:.2f}".format,
+            # float_format="{:.1f}".format,
+            float_format=lambda x: helper.float_format_sig(x, sig=2)
 ))

@@ -7,9 +7,43 @@ import seaborn as sns
 from scipy.stats import linregress
 from helper import sample_dist
 
+"""
+synthetic_plots.py
+
+Purpose
+-------
+Generate diagnostic plots and sample-complexity summaries for synthetic
+experiments. For each distribution/parameter setting, the script iterates over
+(b, lambda) pairs and studies how each algorithm’s performance evolves as the
+number of samples N increases.
+
+Conceptually, for each (distribution, param, b, lam) instance:
+1) Compute Monte Carlo reference solutions using a large demand sample:
+      - qopt / opt_cost : oracle newsvendor solution under the true demand
+      - mm_opt / mm_cost: robust min-max solution under lambda (and qbar)
+2) Decide whether the instance is "identifiable" using the sign of mm_cost:
+      - mm_cost <= 0  -> IDENTIFIABLE (compare to oracle baseline opt_cost)
+      - mm_cost > 0   -> UNidentifiable (compare to robust baseline mm_cost)
+3) For each algorithm and sample size N, compute the mean cost across replications
+   and measure relative error against the relevant baseline.
+4) Report, for each algorithm, the smallest N such that relative error is <= THRESHOLD.
+5) (Optional; currently commented out) Produce and save line plots showing
+   baseline-centered performance vs N.
+
+Key outputs
+-----------
+- Console output for each (param, b, lam):
+    * baseline quantities (qopt, opt_cost, mm_opt, mm_cost)
+    * per-(algorithm, N) average cost and relative error
+    * per-algorithm sample complexity summary ("smallest_N")
+- (If uncommented) Saved PDF figures per (distribution, param, b, lam) showing
+  adjusted performance vs N.
+"""
+  
+
 
 PLOT_REGRET = True
-MAKE_LEGEND = True
+MAKE_LEGEND = False
 h = 1
 
 
@@ -89,9 +123,7 @@ for distribution_name in distribution_list:
         gminus_calc_list = sample_dist(int(1e7), distribution_name, param)
 
         for b in b_values:
-        # for b in [b_values[0]]:
             for lam in reversed(lam_values):
-            # for lam in [lam_values[-1]]:
                 print(f'Creating plot for: b = {b} and lam = {lam}')
                 plot_df = df[(df['b'] == b) & (df['lam'] == lam)]
 
@@ -117,8 +149,10 @@ for distribution_name in distribution_list:
 
 
 
+                THRESHOLD = 0.05
+
+
                 if IDENTIFIABLE:
-                    # print(plot_df.head(5))
 
                     # Filter to rows where metric is 'minmax_cost'
                     minmax_df = plot_df[plot_df["metric"] == "true_cost"]
@@ -137,13 +171,12 @@ for distribution_name in distribution_list:
                     average_values["relative_increase"] = (average_values["avg_value"] - opt_cost) / opt_cost
 
 
-                    print(average_values)
 
-                    minmax_df["condition_met"] = (minmax_df["value"] - mm_cost) / mm_cost <= 0.1
+                    minmax_df["condition_met"] = (minmax_df["value"] - mm_cost) / mm_cost <= THRESHOLD
 
 
                     smallest_N = (
-                    average_values[average_values["relative_increase"] <= 0.1]
+                    average_values[average_values["relative_increase"] <= THRESHOLD]
                     .groupby("algorithm")["N"]
                     .min()
                     .reindex(average_values["algorithm"].unique(), fill_value=float('nan'))
@@ -151,20 +184,12 @@ for distribution_name in distribution_list:
                     .rename(columns={"N": "smallest_N"})
                     )
 
-                    print(smallest_N)
-
-
-
-
-
-
 
 
 
 
                 if not IDENTIFIABLE:
                     # Determine the sample complexity for error <= 5%
-                    # print(plot_df.head(5))
 
                     # Filter to rows where metric is 'minmax_cost'
                     minmax_df = plot_df[plot_df["metric"] == "minmax_cost"]
@@ -185,11 +210,11 @@ for distribution_name in distribution_list:
 
                     print(average_values)
 
-                    minmax_df["condition_met"] = (minmax_df["value"] - mm_cost) / mm_cost <= 0.1
+                    minmax_df["condition_met"] = (minmax_df["value"] - mm_cost) / mm_cost <= THRESHOLD
 
 
                     smallest_N = (
-                    average_values[average_values["relative_increase"] <= 0.1]
+                    average_values[average_values["relative_increase"] <= THRESHOLD]
                     .groupby("algorithm")["N"]
                     .min()
                     .reindex(average_values["algorithm"].unique(), fill_value=float('nan'))
@@ -206,7 +231,33 @@ for distribution_name in distribution_list:
                 ax = plt.gca()  # Get the current axes
 
                 for algorithm, style in line_styles.items():
-                    if (not IDENTIFIABLE and algorithm != 'true_saa') or IDENTIFIABLE:
+                    # if True:
+                    if IDENTIFIABLE:
+                        subset = plot_df[plot_df['algorithm'] == algorithm].copy()
+                        marker = markers.get(algorithm, None)  # Use `.get()` for safety
+                        
+                        # Subtract 'mm_cost' from 'value' for each entry
+                        subset['adjusted_value'] = subset['value'] - opt_cost
+
+                        if MAKE_LEGEND:
+                            algo_label = mapping[algorithm]
+                        else:
+                            algo_label = algorithm
+
+                        sns.lineplot(
+                            data=subset[subset['metric'] == 'true_cost'], 
+                            x='N', y='adjusted_value',  # Use the adjusted value column
+                            ax=ax, 
+                            label=algo_label, 
+                            linestyle=style, 
+                            color = color_mapping.get(algorithm, None),
+                            marker=marker
+                        )                # Add legend to the plot
+                        ax.set_ylabel(r"$\textup{Vanilla-Regret}(q)$")
+
+
+
+                    if (not IDENTIFIABLE and algorithm != 'true_saa'):
                         subset = plot_df[plot_df['algorithm'] == algorithm].copy()
                         marker = markers.get(algorithm, None)  # Use `.get()` for safety
                         
@@ -228,9 +279,10 @@ for distribution_name in distribution_list:
                             marker=marker
                         )                # Add legend to the plot
 
+                        ax.set_ylabel(r"$\textup{Regret}(q) - \Delta$")
+
                 # Remove x and y labels
                 ax.set_xlabel(r"$N$")
-                ax.set_ylabel(r"$\textup{Regret}(q) - \Delta$")
 
                 # Ensure the y-axis always includes 0
                 y_min, y_max = ax.get_ylim()

@@ -1,0 +1,28 @@
+name: robust_inventory
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Core language
+  - python>=3.9
+  - pip
+
+  # Scientific Python stack
+  - numpy
+  - pandas
+  - scipy
+
+  # Plotting
+  - matplotlib
+  - seaborn
+
+  # Statistics / survival analysis (Kaplan–Meier, etc.)
+  - statsmodels
+  - lifelines
+
+  # I/O helpers (optional but commonly used in the repo)
+  - openpyxl
+
+  # Progress bars / utilities
+  - tqdm

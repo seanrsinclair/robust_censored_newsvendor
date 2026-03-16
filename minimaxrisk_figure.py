@@ -19,10 +19,9 @@ Creating a figure comparing Regret against the order level
 '''
 
 # Set up the plot style
-
-sns.set_style("white")
-sns.set_palette("husl")
 plt.style.use('PaperDoubleFig.mplstyle.txt')
+sns.set_style("white")
+sns.set_palette(sns.color_palette("viridis")[::-1])
 
 # Data to evaluate the expectations
 eval_data = np.random.exponential(scale=80, size=int(1e7))
@@ -42,19 +41,21 @@ lam = np.quantile(eval_data, 0.4)
 q_list = np.linspace(0, qbar, 300) # spacing of order levels q to check
 
 
-# NOTE: Uncomment the following code to generate a dataset that will be plotted
+import os
 
-# data = []
+csv_path = './data/minimaxrisk.csv'
 
-# for q in q_list:
-#     for b in b_list:
-#         rho = b / (b+h)
-#         # print(f'Rho: {rho}')
-#         cost = get_robust_cost(q, b, h, lam, qbar, eval_data) # gets the regret for order level q
-#         data.append({'b': h, 'h': h, 'rho': rho, 'q': q, 'cost': cost})
+# Generate the dataset only if it does not already exist
+if not os.path.exists(csv_path):
+    data = []
+    for q in q_list:
+        for b in b_list:
+            rho = b / (b + h)
+            cost = get_robust_cost(q, b, h, lam, qbar, eval_data)
+            data.append({'b': b, 'h': h, 'rho': rho, 'q': q, 'cost': cost})
 
-# df = pd.DataFrame(data)
-# df.to_csv(f'./data/minimaxrisk.csv', index=False)
+    df = pd.DataFrame(data)
+    df.to_csv(csv_path, index=False)
 
 tick_list = []
 label_list = []
@@ -105,7 +106,7 @@ df = df[df['q'] <= 100]
 
 # Create the seaborn line plot with x-axis 'q', y-axis 'cost', and color-coded by 'rho'
 plt.figure(figsize=(12, 6))
-sns.lineplot(data=df, x='q', y='cost', hue='rho')
+sns.lineplot(data=df, x='q', y='cost', hue='rho', palette="viridis_r")
 
 
 for cusp in tick_list: # adds the cusp to the figure

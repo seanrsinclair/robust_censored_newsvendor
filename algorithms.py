@@ -5,273 +5,353 @@ from lifelines import KaplanMeierFitter
 
 '''
 Algorithm implementation for censored newsvendor problem. Each of the algorithms takes as input:
-- order level (lambda)
-- censored demands: list of [min(demand, order)]
+- order_levels : list of order levels (qoff_k)
+- censored_demands : list of lists/arrays, each containing censored demands for the corresponding season
 - b,h : cost parameters
-- bonus_demands_list: list of [min(demand, LAM_CONS*order)] for the second selling season
 '''
 
 
 DEBUG = False
+PRINT_EXTRA = False
 
-def km_estimate(order_level_one, order_level_two, censored_demands_one, censored_demands_two, b, h):
+def km_estimate(order_levels, censored_demands, b, h):
     '''
-    Implements the KM estimate using the lifelines package
+    Implements the KM estimate using the lifelines package over multiple seasons.
+
+    Parameters
+    ----------
+    order_levels : list[float]
+        Censoring/order levels for each selling season.
+    censored_demands : list[np.ndarray]
+        List of arrays/lists; the k-th entry contains samples censored at order_levels[k].
+    b, h : float
+        Cost parameters.
     '''
-    lam = order_level_one
+    # Validate inputs
+    assert isinstance(order_levels, (list, tuple)) and isinstance(censored_demands, (list, tuple)), "order_levels and censored_demands must be lists/tuples"
+    assert len(order_levels) == len(censored_demands), "order_levels and censored_demands must have the same length"
+    assert len(order_levels) >= 1, "At least one season is required"
+
+    lam = max(order_levels)
 
     # Initialize Kaplan-Meier fitter
     kmf = KaplanMeierFitter()
-    
-    event_one = [1 if di < order_level_one else 0 for di in censored_demands_one] # gets the events for if the demand was uncensored
-    event_two = [1 if di < order_level_two else 0 for di in censored_demands_two] # repeats for the bonus sales data
 
-    # Fit the data using the KM estimator
-    kmf.fit(np.concatenate((censored_demands_one, censored_demands_two)), event_observed=np.concatenate((event_one, event_two)))
-    
+    # Build pooled data and observed-event indicators per season
+    pooled = []
+    observed = []
+    for qoff, data in zip(order_levels, censored_demands):
+        data_arr = np.asarray(data)
+        pooled.append(data_arr)
+        observed.append((data_arr < qoff).astype(int))
+
+    pooled = np.concatenate(pooled)
+    observed = np.concatenate(observed)
+
+    # Fit the KM estimator using pooled samples with per-sample censor flags
+    kmf.fit(pooled, event_observed=observed)
+
     # Extract the cumulative distribution function (1 - survival function)
     cdf = 1 - kmf.survival_function_
 
-    # Find the optimal order quantile (cost ratio b / (b + h))
+    # Target quantile
     rho = b / (b + h)
 
     # Find the corresponding order level from the KM-estimated CDF
     order_level = cdf[cdf['KM_estimate'] >= rho].index.min()
 
-    # Check if order_level is NaN, and return lam if true
+    # Fallback to the largest order level if KM grid doesn't cross rho
     if np.isnan(order_level):
-        return lam
-    
-    return order_level
+        return lam, 1
+    idx = -1
+    if order_level < lam:
+        idx = 1
+    return float(order_level), idx
 
 def true_saa(uncensored_demands, b, h):
     '''
-    Takes as input an uncensored dataset list, and returns the empirical rho-quantile form the uncensored data
+    Takes as input an uncensored dataset list/array, and returns the empirical rho-quantile from the uncensored data
     '''
     return np.quantile(uncensored_demands, b/(b+h))
 
-def ignorant_saa(order_level_one, order_level_two, censored_demands_one, censored_demands_two, b, h):
+def ignorant_saa(order_levels, censored_demands, b, h):
     '''
-    Ignores the potential impact of censoring and returns the empirical rho-quantile form the censored data
+    Ignores censoring differences across seasons; returns the empirical rho-quantile from the pooled censored data.
     '''
-    return np.quantile(np.concatenate((censored_demands_one, censored_demands_two)), b/(b+h))
+    assert len(order_levels) == len(censored_demands) and len(order_levels) >= 1
+    pooled_data = np.concatenate([np.asarray(x) for x in censored_demands])
+    return np.quantile(pooled_data, b/(b+h)), 1
 
-def subsample_saa(order_level_one, order_level_two, censored_demands_one, censored_demands_two, b, h):
+def subsample_saa(order_levels, censored_demands, b, h):
     '''
-    Subsamples the dataset to only contain samples which are uncensored, and returns the empirical rho-quantile
+    Uses only uncensored samples from each season and returns the empirical rho-quantile.
     '''
-
-    filtered_demands_one = [demand for demand in censored_demands_one if demand < order_level_one]
-    filtered_demands_two = [demand for demand in censored_demands_two if demand < order_level_two]
-    filtered_demands = np.concatenate((filtered_demands_one, filtered_demands_two))
-    if len(filtered_demands) > 0:
-        return np.quantile(filtered_demands, b/(b+h))
-    else: # if no uncensored samples just output lambda
-        return order_level_one
-
-def joint_order_saa(order_level_one, order_level_two, censored_demands_one, censored_demands_two, b, h):
-    '''
-    Implements the Fan, Chen, Zhou (2022) algorithm with two selling seasons
-        order_level_one: lambda, the maximum selling season
-        order_level_two: second selling season <= lambda
-        censored_demands_one: demand list censored at order_level_one
-        censored_demands_two: demand list censored at order_leve_two
-    '''
-    # print(f'Running for: {order_level_two, order_level_one}')
-    # Constants beta with epsilon = 1 / sqrt(N)
-    beta = (min(b, h) / (18 * (h + b))) * (1 / np.sqrt(len(censored_demands_one)))
-    rho = b / (b+h)
-    actual_rho = max(0, rho- 2 * beta)
-    lam = order_level_one
-    N = len(censored_demands_one)
-
-    # First we combine both datasets to estimate P(D <= order_level_two).
-    combined_data = np.concatenate((censored_demands_one, censored_demands_two))
-
-    p_1 = np.mean(combined_data < order_level_two) # calculates probability mass up to the first selling season
-    if p_1 >= actual_rho: # then we know that the empirical rho-quantile is in [0, order_level_two], so just combine output quantile
-        return np.quantile(combined_data, actual_rho)
+    assert len(order_levels) == len(censored_demands) and len(order_levels) >= 1
+    
+    pools = []
+    for qoff, data in zip(order_levels, censored_demands):
+        arr = np.asarray(data)
+        pools.append(arr[arr < qoff])
+    filtered = np.concatenate([p for p in pools if len(p) > 0]) if any(len(p) > 0 for p in pools) else np.array([])
+    if len(filtered) > 0:
+        return np.quantile(filtered, b/(b+h)), 1
     else:
-        # now we need to augment with an estimate of P(order_level_two < D <= order_level_one)
-        p_2 = np.mean((order_level_two <= censored_demands_one) & (censored_demands_one < order_level_one))
-        if p_1 + p_2 >= actual_rho: # solution is within [order_level_two, order_level_one)
-            remaining_data = np.asarray([di for di in censored_demands_one if di >= order_level_two])   
-            # sol_1 = np.quantile(remaining_data, (N / len(remaining_data))*(actual_rho - p_1))
-            # return sol_1
-            # # print(f'Potential sol_1: {sol_1}')
-            sorted_data = np.sort(np.unique(remaining_data))
-            # print(f'Checking values: {sorted_data}')
-            for q in sorted_data:
-                remaining_mean = np.mean((order_level_two <= censored_demands_one) & (censored_demands_one <= q))
-                if p_1 + remaining_mean >= actual_rho: # TODO: Running into setting where this case is never visited
-                    # print(f'Output solution: {q}')
-                    return float(q)
+        return max(order_levels), 1
 
-        else: # we still have not seen \rho mass, so let us just output lambda
-            # print(f'Did not find sufficient mass, output: {order_level_one}')
-            return float(order_level_one)
 
-def robust_plus_saa(order_level_one, order_level_two, censored_demands_one, censored_demands_two, b, h, qbar, Gminus, delta=0.3):
+def joint_order_saa(order_levels, censored_demands, b, h):
     '''
-    Implements our algorithm
-
-    Note: Added some "sandwhiching" to ensure the confidence interval estimates for Gminus are in [0,1]
+    Fan, Chen, Zhou (2022) multi-season censored SAA.
+    For k = 1..K (with q_off sorted ascending), define
+        \hat F^k(x) = (1 / (\sum_{k'≥k} N_{k'})) * \sum_{k'≥k} \sum_{i=1}^{N_{k'}} 1{ s^{off}_{k',i} < x }.
+    Terminate at the first k such that \hat F^k(q_off_k) ≥ ρ − 2β, where
+        β = (min(b,h) / (18 (b+h))) * ε,  with  ε = 1/√N_total.
+    Output \hat q = inf{ q : \hat F^k(q) ≥ ρ − 2β } based on the same pooled data (k'≥k).
+    If no such k exists, output λ (largest order level).
+    Returns (value, -1) for compatibility with downstream code.
     '''
+    assert len(order_levels) == len(censored_demands) and len(order_levels) >= 1
+
+    # Sort seasons by increasing order level and align data
+    idx = np.argsort(order_levels)
+    qoffs = [float(order_levels[i]) for i in idx]
+    data_lists = [np.asarray(censored_demands[i]) for i in idx]
+
+    K = len(qoffs)
+    lam = qoffs[-1]
 
 
-    lam = order_level_one
+    # Parameters
+    Ns = [len(x) for x in data_lists]
+    N = Ns[-1] # number of data points at lambda
+    eps = 1.0 / np.sqrt(N)
+    beta = (min(b, h) / (18.0 * (b + h))) * eps
     rho = b / (b+h)
-
-    N = len(censored_demands_one)
-
-
-    Gminushat_two = np.mean(censored_demands_two < order_level_two)
-    Gminushat_one = np.mean(censored_demands_one < lam)
+    target = max(0.0, rho - 2.0 * beta)
 
 
-    conf = np.sqrt(np.log(4 / delta) / (2*N))
+    idx = -1
+    # Iterate k = 0..K-1 (1..K in paper). For each k, pool seasons k..K-1
+    for k in range(K):
+        pooled = np.concatenate(data_lists[k:]) if sum(Ns[k:]) > 0 else np.array([])
+        if pooled.size == 0:
+            continue
+        qk = qoffs[k]
+        Fk_at_qk = np.mean(pooled < qk)
+        if Fk_at_qk >= target:
+            # Return the (rho-2β)-quantile of this pooled distribution
+            order_level = float(np.quantile(pooled, target))
+            if order_level < lam:
+                idx = 1
+            return float(np.quantile(pooled, target)), idx
 
-    # one is for large selling season
-    # two is for small selling season
-
-    # both are bigger than rho + conf
-    if Gminushat_two >= np.minimum(1, rho+conf) and Gminushat_one >= np.minimum(1, rho+conf):
-        combined_data = np.concatenate((censored_demands_one, censored_demands_two))
-        return np.quantile(combined_data, rho)
-
-    # only the small one (somehow) is bigger than rho + conf
-    elif Gminushat_two >= np.minimum(1, rho+conf) and Gminushat_one < np.minimum(1, rho+conf):
-        return np.quantile(censored_demands_two, rho)
-
-    # the small one is smaller than rho + conf, we run the old version of the algorithm
-    else: # Old Version of Algorithm
-        Gminushat = Gminushat_one
-
-        # Tests out three different confidence intervals to determine if one is tighter than the other
-        conf_one = np.sqrt(np.log(2 / delta) / (2*N))
-        conf_two = np.sqrt(1 / (4*N * delta))
-        conf_three = np.sqrt((4*Gminus*(1 - Gminus) *np.log(2 / delta))/N) + (4*max(Gminus, 1 - Gminus)*np.log(2 / delta))/(3*N)
-
-        if DEBUG:
-            print(f'Bernstein: {conf_three}, Chernoff: {conf_two}, Hoeffding: {conf_one}')
-            if conf_three <= min(conf_one, conf_two):
-                print(f'Bernstein Smallest')
-            elif conf_two <= min(conf_one, conf_three):
-                print(f'Chernoff Smallest!')
-            else:
-                print(f'Hoeffding Smallest!')
-
-        conf_radius = min(conf_one, conf_two, conf_three) # taking minimum of Hoeffding, Bernstein, and Chernoff
-
-        if DEBUG: print(f'Gminushat: {Gminushat}, and confidence radius: {conf_radius}')
-        if Gminushat >= np.minimum(1,rho + conf_radius): # Strictly identifiable regime
-            if DEBUG: print(f'Outputting SAA Solution')
-            return np.quantile(censored_demands_one, rho)
-        elif Gminushat < np.maximum(0, rho - conf_radius): # Striclty unidentifiable regime
-            if DEBUG: print(f'Outputting QCrit')
-            return helper.get_q_crit(Gminushat, lam, b, h, qbar)
-        else: # Knife-edge, outputting lambda
-            if DEBUG: print(f'Outputting lam')
-            return lam
+    # If still not enough mass, output lam
+    return float(lam), -1
 
 
-def robust_bonus_saa(order_level_one, order_level_two, censored_demands_one, censored_demands_two, b, h, qbar, Gminus, delta=0.3):
+
+
+def robust_km(order_levels, censored_demands, b, h, qbar, Gminus, delta=0.3, conf_cons = 1):
     '''
-    Implements our algorithm
-
-    Note: Added some "sandwhiching" to ensure the confidence interval estimates for Gminus are in [0,1]
+    Robust KM algorithm.
     '''
-    lam = order_level_one
+    assert len(order_levels) == len(censored_demands) and len(order_levels) >= 1
 
-    rho = b / (b+h)
+    lam_idx = int(np.argmax(order_levels))
+    lam = float(order_levels[lam_idx])
+    rho = b / (b + h)
 
-    N = len(censored_demands_one)
+    data = np.asarray(censored_demands[lam_idx])
+    N = len(data)
 
-    conf = np.sqrt(np.log(2 / delta) / (2*N))
+    Gminushat = np.mean(data < lam)
 
-    combined_data = np.append(censored_demands_one, censored_demands_two)
+    conf_one = np.sqrt(np.log(2 / delta) / (2 * max(1, N)))
+    conf_two = np.sqrt(1 / (4 * max(1, N) * delta))
+    conf_three = np.sqrt((4 * Gminus * (1 - Gminus) * np.log(2 / delta)) / max(1, N)) + (4 * max(Gminus, 1 - Gminus) * np.log(2 / delta)) / (3 * max(1, N))
 
-    p2 = np.mean(combined_data < order_level_two)
+    conf_radius = conf_cons * min(conf_one, conf_two, conf_three)
 
-    p1_bonus = np.mean((order_level_two <= censored_demands_one) & (censored_demands_one < lam))
 
-    if p2 + p1_bonus >= np.minimum(1, rho+conf):
-        return np.quantile(combined_data, rho)
-
-    elif p2 + p1_bonus < np.maximum(0, rho - conf):
-        return helper.get_q_crit(p2 + p1_bonus, lam, b, h, qbar)
-
+    if Gminushat >= min(1.0, rho + conf_radius):
+        # likely identifiable, fall back to KM algorithm
+        return km_estimate(order_levels, censored_demands, b, h)[0], 1
+    
+    elif Gminushat < max(0.0, rho - conf_radius):
+        return helper.get_q_crit(Gminushat, lam, b, h, qbar), -1
     else:
-        return lam
+        return float(lam), 0
 
 
-def robust_saa(order_level_one, order_level_two, censored_demands_one, censored_demands_two, b, h, qbar, Gminus, delta=0.3):
+
+
+
+
+def robust_saa(order_levels, censored_demands, b, h, qbar, Gminus, delta=0.3, conf_cons = 1):
     '''
-    Implements our algorithm
-
-    Note: Added some "sandwhiching" to ensure the confidence interval estimates for Gminus are in [0,1]
+    Our baseline robust algorithm.
     '''
-    lam = order_level_one
-    rho = b / (b+h)
-    N = len(censored_demands_one)
+    assert len(order_levels) == len(censored_demands) and len(order_levels) >= 1
+
+    lam_idx = int(np.argmax(order_levels))
+    lam = float(order_levels[lam_idx])
+    rho = b / (b + h)
+
+    data = np.asarray(censored_demands[lam_idx])
+    N = len(data)
+
+    Gminushat = np.mean(data < lam)
+
+    conf_one = np.sqrt(np.log(2 / delta) / (2 * max(1, N)))
+    conf_two = np.sqrt(1 / (4 * max(1, N) * delta))
+    conf_three = np.sqrt((4 * Gminus * (1 - Gminus) * np.log(2 / delta)) / max(1, N)) + (4 * max(Gminus, 1 - Gminus) * np.log(2 / delta)) / (3 * max(1, N))
+
+    conf_radius = conf_cons * min(conf_one, conf_two, conf_three)
+
+    if Gminushat >= min(1.0, rho + conf_radius):
+        return float(np.quantile(data, rho, method="higher")), 1
+    elif Gminushat < max(0.0, rho - conf_radius):
+        return helper.get_q_crit(Gminushat, lam, b, h, qbar), -1
+    else:
+        return float(lam), 0
 
 
-    Gminushat = np.mean(censored_demands_one < lam)
+def robust_plus_saa(order_levels, censored_demands, b, h, qbar, Gminus, delta=0.3, conf_cons = 1, INCLUDE_LOG = True):
+    '''
+    Multi-season version of our robust algorithm.
+    '''
+    assert len(order_levels) == len(censored_demands) and len(order_levels) >= 1
 
-    # Tests out three different confidence intervals to determine if one is tighter than the other
-    conf_one = np.sqrt(np.log(2 / delta) / (2*N))
-    conf_two = np.sqrt(1 / (4*N * delta))
-    conf_three = np.sqrt((4*Gminus*(1 - Gminus) *np.log(2 / delta))/N) + (4*max(Gminus, 1 - Gminus)*np.log(2 / delta))/(3*N)
+    rho = b / (b + h)
+    lam_idx = int(np.argmax(order_levels))
+    lam = float(order_levels[lam_idx])
+    lam_data = np.asarray(censored_demands[lam_idx])
+    N = len(lam_data)
 
-    if DEBUG:
-        print(f'Bernstein: {conf_three}, Chernoff: {conf_two}, Hoeffding: {conf_one}')
-        if conf_three <= min(conf_one, conf_two):
-            print(f'Bernstein Smallest')
-        elif conf_two <= min(conf_one, conf_three):
-            print(f'Chernoff Smallest!')
+    K = len(order_levels)
+
+    # Per-season empirical G_k^-(L)
+    Ghats = []
+    for qoff, data in zip(order_levels, censored_demands):
+        arr = np.asarray(data)
+        Ghats.append(np.mean(arr < qoff))
+    if DEBUG: print(f'Ghats: {Ghats}')
+    # Hoeffding confidence for all of the selling seasons
+
+    if INCLUDE_LOG:
+        conf = [
+            conf_cons * np.sqrt(
+                np.log((2*(K-1)) / delta) / (max(1, 2*len(censored_demands[k])))
+            )
+            for k in range(len(order_levels))
+        ]
+    else:
+        conf = [
+            conf_cons * np.sqrt(
+                np.log(2 / delta) / (max(1, 2*len(censored_demands[k])))
+            )
+            for k in range(len(order_levels))
+        ]
+
+    conf[lam_idx] = conf_cons * np.sqrt( # no log term for the lam_idx
+            np.log(2 / delta) / (max(1, 2*len(censored_demands[lam_idx])))
+        )
+
+    if DEBUG: print(f'Conf terms: {conf}')
+    # U_est := { k : \hat G^-_k(qoff_k) >= rho + eps_k }
+    Uest = [k for k in range(len(order_levels)) if Ghats[k] >= min(1.0, rho + conf[k])]
+    if DEBUG: print(f'Uest: {Uest}')
+    # If U_est nonempty, pool the corresponding censored samples and output the rho-quantile
+    if len(Uest) > 0:
+        pooled = np.concatenate([np.asarray(censored_demands[k]) for k in Uest])
+        return float(np.quantile(pooled, rho, method="higher")), 1        
+
+
+    # Otherwise checks if \Gminushat(lambda) < rho - conf(lambda)
+    elif Ghats[lam_idx] < rho - conf[lam_idx]: #
+        Gminushat = Ghats[lam_idx]
+        return helper.get_q_crit(Gminushat, lam, b, h, qbar), -1
+
+    else: # default to outputting lambda
+        return float(lam), 0
+
+
+
+
+
+def robust_well_separated_saa(order_levels, censored_demands, b, h, qbar, gamma, Gminus, delta=0.3):
+    '''
+    Single-season version for well-separated distributions.
+    '''
+    assert len(order_levels) == len(censored_demands) and len(order_levels) >= 1
+
+    lam_idx = int(np.argmax(order_levels))
+    lam = float(order_levels[lam_idx])
+    rho = b / (b + h)
+
+    data = np.asarray(censored_demands[lam_idx])
+    N = len(data)
+
+    Gminushat = np.mean(data < lam)
+
+    conf_one = np.sqrt(np.log(2 / delta) / (2 * max(1, N)))
+    conf_two = np.sqrt(1 / (4 * max(1, N) * delta))
+    conf_three = np.sqrt((4 * Gminus * (1 - Gminus) * np.log(2 / delta)) / max(1, N)) + (4 * max(Gminus, 1 - Gminus) * np.log(2 / delta)) / (3 * max(1, N))
+
+    conf_radius = min(conf_one, conf_two, conf_three)
+
+    if Gminushat >= min(1.0, rho + conf_radius):
+        return float(np.quantile(data, rho)), 1
+    elif Gminushat < max(0.0, rho - conf_radius):
+        qcrit = helper.get_well_separated_q_crit(Gminushat, lam, b, h, qbar, gamma)
+        return qcrit, -1
+    else:
+        return float(lam), 0
+
+
+
+def robust_plus_well_separated_saa(order_levels, censored_demands, b, h, qbar, gamma, Gminus, delta=0.3):
+    '''
+    Single-season version for well-separated distributions with the additional checks.
+    '''
+    assert len(order_levels) == len(censored_demands) and len(order_levels) >= 1
+
+    rho = b / (b + h)
+    lam_idx = int(np.argmax(order_levels))
+    lam = float(order_levels[lam_idx])
+
+    lam_data = np.asarray(censored_demands[lam_idx])
+    N = len(lam_data)
+
+    # Per-season empirical G^-_k(qoff)
+    Ghats = []
+    for qoff, data in zip(order_levels, censored_demands):
+        arr = np.asarray(data)
+        Ghats.append(np.mean(arr < qoff))
+
+    conf_one = np.sqrt(np.log(2 / delta) / (2 * max(1, N)))
+    conf_two = np.sqrt(1 / (4 * max(1, N) * delta))
+    conf_three = np.sqrt((4 * Gminus * (1 - Gminus) * np.log(2 / delta)) / max(1, N)) + (4 * max(Gminus, 1 - Gminus) * np.log(2 / delta)) / (3 * max(1, N))
+    conf_radius = min(conf_one, conf_two, conf_three)
+
+    Ghat_lam = Ghats[lam_idx]
+
+    if Ghat_lam >= min(1.0, rho + conf_radius):
+        return float(np.quantile(lam_data, rho)), 1
+
+    # Extra-identifiability checks across seasons
+    if (gamma * lam >= rho) or any(Ghats[k] >= rho + conf_radius - gamma * (lam - order_levels[k]) for k in range(len(order_levels))):
+        return float(np.quantile(lam_data, rho)), 1
+
+    if Ghat_lam > rho:
+        qghat = float(np.quantile(lam_data, rho))
+        if (lam - qghat) >= (conf_radius / gamma):
+            return qghat, 1
         else:
-            print(f'Hoeffding Smallest!')
+            return float(lam), 0
 
-    conf_radius = min(conf_one, conf_two, conf_three) # taking minimum of Hoeffding, Bernstein, and Chernoff
+    if Ghat_lam < max(0.0, rho - conf_radius):
+        qcrit = helper.get_well_separated_q_crit(Ghat_lam, lam, b, h, qbar, gamma)
+        return qcrit, -1
 
-    if DEBUG: print(f'Gminushat: {Gminushat}, and confidence radius: {conf_radius}')
-    if Gminushat >= np.minimum(1,rho + conf_radius): # Strictly identifiable regime
-        if DEBUG: print(f'Outputting SAA Solution')
-        return np.quantile(censored_demands_one, rho)
-    elif Gminushat < np.maximum(0, rho - conf_radius): # Striclty unidentifiable regime
-        if DEBUG: print(f'Outputting QCrit')
-        return helper.get_q_crit(Gminushat, lam, b, h, qbar)
-    else: # Knife-edge, outputting lambda
-        if DEBUG: print(f'Outputting lam')
-        return lam
-
-
-
-'''
-Implementing a version of the AIM and the Burnetas-Smith algorithm, but have poor performance since we have offline censored data
-instead of able to collect data adaptively online
-'''
-def aim(order_level, censored_demands, b, h):
-    order = order_level
-
-    t = 0
-    for d in censored_demands:
-        t += 1
-        epsilon = 10 / (max(b,h) * np.sqrt(t))
-        if d < order_level:
-            order = max(0, order - epsilon * h)
-        else:
-            order += epsilon * b
-    return order
-
-def burnetas_smith(order_level, censored_demands, b, h):
-    order = order_level
-
-    t = 0
-    for d in censored_demands:
-        t += 1
-        if d < order_level:
-            order *= (1 - (h / ((b+h)*t)))
-        else:
-            order *= (1 + (h / ((b+h)*t)))
-    return order
+    return float(lam), 0

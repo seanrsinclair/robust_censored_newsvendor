@@ -1,0 +1,78 @@
+freshnet_data_sims/datasets/train.parquet
+freshnet_data_sims/datasets/train.csv
+freshnet_data_sims/datasets/
+
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# =========================
+# Virtual environments
+# =========================
+venv/
+.env/
+.venv/
+env/
+ENV/
+
+# =========================
+# Jupyter
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# Data files
+# =========================
+*.csv
+*.parquet
+*.tsv
+*.feather
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.npz
+*.npy
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# IDEs
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# Build artifacts
+# =========================
+build/
+dist/
+*.egg-info/
+
+# =========================
+# Testing / coverage
+# =========================
+.coverage
+.pytest_cache/
+htmlcov/
+
+# =========================
+# Misc
+# =========================
+*.tmp
+*.swp
